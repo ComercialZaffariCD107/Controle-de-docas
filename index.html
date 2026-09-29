@@ -174,6 +174,11 @@ input:focus,select:focus{outline:2px solid var(--amber);outline-offset:1px}
 .userchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .userchip:hover{background:rgba(255,255,255,.14)}
 .iconbtn.on{background:var(--amber);border-color:var(--amber);color:#0E1B3D}
+.check{flex-direction:row;align-items:center;gap:10px;color:var(--ink);font-size:14px;font-weight:600;min-height:44px;cursor:pointer}
+.check input{width:20px;height:20px;min-height:0;padding:0;accent-color:#25D366}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media (max-width:420px){.two{grid-template-columns:1fr}}
+input.err{border-color:#C0392B;outline:2px solid rgba(192,57,43,.25)}
 .iconbtn.wa.on{background:#25D366;border-color:#25D366;color:#063B1E}
 .mode{display:flex;gap:12px;align-items:flex-start;background:#FFF4E0;border:1px solid #E48B00;color:#5C3A00;border-radius:14px;padding:12px 16px;margin-top:14px;font-size:14px;line-height:1.45}
 :root[data-theme="dark"] .mode{background:#2E2208;color:#F7D9A6}
@@ -254,7 +259,11 @@ input:focus,select:focus{outline:2px solid var(--amber);outline-offset:1px}
 <dialog id="dlgOcupar">
   <div class="mh"><span class="d" id="oNum">00</span><div><h4>Listar carga nesta doca</h4><p id="oPav">Pavilhão</p></div></div>
   <div class="mb">
-    <label>Nº da carga (opcional)<input id="oCarga" inputmode="numeric" autocomplete="off" placeholder="Ex.: 482913"></label>
+    <div class="two">
+      <label>Nº da carga<input id="oCarga" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="Ex.: 482913"></label>
+      <label>Loja<input id="oLoja" autocomplete="off" maxlength="40" placeholder="Ex.: 12 ou Cristóvão"></label>
+    </div>
+    <label class="check"><input type="checkbox" id="oWa"> Avisar no WhatsApp</label>
     <p class="hint">A doca ficará como <strong>ocupada</strong> para todos.</p>
   </div>
   <div class="mf"><button class="btn" data-close>Cancelar</button><button class="btn pri" id="oOk">Confirmar e ocupar</button></div>
@@ -287,14 +296,16 @@ const FIREBASE_CONFIG = null;
 const ADMIN_PIN = '';
 const COLECAO = 'docas_cd107';
 
-/* Aviso no WhatsApp ao liberar uma doca
+/* Aviso no WhatsApp ao liberar e ao listar carga numa doca
    numero: '' → o WhatsApp abre para a pessoa escolher o grupo/contato
            '5551999999999' → abre direto a conversa com esse número (DDI+DDD+número)
-   Variáveis da mensagem: {doca} {pavilhao} {tipo} {nome} {hora} */
+   Variáveis: {doca} {pavilhao} {tipo} {nome} {hora} {carga} {loja} */
 const WHATSAPP = {
   ativoPorPadrao: true,
   numero: '',
-  mensagem: '🟢 *DOCA {doca} LIBERADA*\n{pavilhao} · Doca {tipo}\nLiberada por {nome} às {hora}\n\nPode listar carga nesta doca.'
+  // Linhas com {carga} ou {loja} vazios são removidas automaticamente
+  mensagemLiberar: '🟢 *DOCA {doca} LIBERADA*\n{pavilhao} · Doca {tipo}\nLiberada por {nome} às {hora}\n\nPode listar carga nesta doca.',
+  mensagemListar:  '🔴 *DOCA {doca} OCUPADA*\n{pavilhao} · Doca {tipo}\n📦 Carga: *{carga}*\n🏪 Loja: *{loja}*\nListada por {nome} às {hora}'
 };
 
 /* Docas cadastradas automaticamente na primeira vez (se a base estiver vazia) */
@@ -330,23 +341,24 @@ const DOCAS_INICIAIS = [
   };
 
   /* ---------- WhatsApp ---------- */
-  function paintWa(){ const b=$('#waBtn'); b.classList.toggle('on',S.wa); b.setAttribute('aria-pressed',String(S.wa)); b.title=S.wa?'WhatsApp: abre ao liberar (clique para desligar)':'WhatsApp: desligado (clique para ligar)'; }
+  function paintWa(){ const b=$('#waBtn'); b.classList.toggle('on',S.wa); b.setAttribute('aria-pressed',String(S.wa)); b.title=S.wa?'WhatsApp: abre ao liberar e ao listar (clique para desligar)':'WhatsApp: desligado (clique para ligar)'; }
   paintWa();
   $('#waBtn').onclick=()=>{ S.wa=!S.wa; ls.set('docas.wa',S.wa); paintWa();
-    toast({title:S.wa?'Aviso no WhatsApp ligado':'Aviso no WhatsApp desligado', text:S.wa?'Ao liberar uma doca, o WhatsApp abre com a mensagem pronta.':'Você ainda pode avisar pelo botão no aviso de doca liberada.', ttl:3500}); };
-  function linkWhats(d){
+    toast({title:S.wa?'Aviso no WhatsApp ligado':'Aviso no WhatsApp desligado', text:S.wa?'Ao liberar ou listar numa doca, o WhatsApp abre com a mensagem pronta.':'Você ainda pode avisar pelos botões nos avisos.', ttl:3500}); };
+  function linkWhats(d, modo, extra){
+    extra=extra||{};
     const hora=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
-    const txt=WHATSAPP.mensagem
-      .replace(/\{doca\}/g,d.num)
-      .replace(/\{pavilhao\}/g,PAVS[d.pav]||'')
-      .replace(/\{tipo\}/g,d.tipo==='virtual'?'virtual':'física')
-      .replace(/\{nome\}/g,S.nome||'—')
-      .replace(/\{hora\}/g,hora);
+    const vars={ doca:d.num, pavilhao:PAVS[d.pav]||'', tipo:d.tipo==='virtual'?'virtual':'física', nome:S.nome||'—', hora, carga:extra.carga||'', loja:extra.loja||'' };
+    const modelo=modo==='listar'?WHATSAPP.mensagemListar:WHATSAPP.mensagemLiberar;
+    const txt=modelo.split('\n')
+      .filter(l=>!(/\{carga\}/.test(l)&&!vars.carga) && !(/\{loja\}/.test(l)&&!vars.loja))
+      .join('\n')
+      .replace(/\{(\w+)\}/g,(m,k)=>k in vars?vars[k]:m);
     const num=String(WHATSAPP.numero||'').replace(/\D/g,'');
     return num ? 'https://wa.me/'+num+'?text='+encodeURIComponent(txt)
                : 'https://api.whatsapp.com/send?text='+encodeURIComponent(txt);
   }
-  function abrirWhats(d){ window.open(linkWhats(d),'_blank','noopener'); }
+  function abrirWhats(d, modo, extra){ window.open(linkWhats(d,modo,extra),'_blank','noopener'); }
 
   /* ---------- notificações do sistema ---------- */
   const temNotif = 'Notification' in window;
@@ -398,7 +410,7 @@ const DOCAS_INICIAIS = [
     });
     return [...out];
   }
-  const novaDoca = (pav,tipo,num) => ({ id:'p'+pav+'-'+num, num:String(num), pav, tipo, status:'ocupada', byName:'', at:null, carga:'' });
+  const novaDoca = (pav,tipo,num) => ({ id:'p'+pav+'-'+num, num:String(num), pav, tipo, status:'ocupada', byName:'', at:null, carga:'', loja:'' });
 
   /* ---------- toasts ---------- */
   function toast({kind='info', num='', title, text='', actions=[], ttl=7000}){
@@ -415,7 +427,7 @@ const DOCAS_INICIAIS = [
   /* =====================================================================
      CAMADA DE DADOS — mesma interface para Firebase e modo local
      subscribe(cb)  cb recebe [{type:'added'|'modified'|'removed', id, data}]
-     liberar(id) · ocupar(id,carga) → {ok, motivo} · adicionar(doc) · remover(id)
+     liberar(id) · ocupar(id,carga,loja) → {ok, motivo} · adicionar(doc) · remover(id)
      ===================================================================== */
   function storeFirebase(){
     firebase.initializeApp(FIREBASE_CONFIG);
@@ -435,13 +447,13 @@ const DOCAS_INICIAIS = [
           cb(snap.docChanges().map(ch=>({type:ch.type, id:ch.doc.id, data:ch.doc.data()})));
         }, onErr);
       },
-      liberar(id){ return col.doc(id).update({status:'livre', byName:S.nome, at:Date.now(), carga:''}); },
-      async ocupar(id,carga){
+      liberar(id){ return col.doc(id).update({status:'livre', byName:S.nome, at:Date.now(), carga:'', loja:''}); },
+      async ocupar(id,carga,loja){
         const ref=col.doc(id);
         return fs.runTransaction(async tx=>{
           const s=await tx.get(ref);
           if(!s.exists || s.data().status!=='livre') return {ok:false, motivo:'ocupada'};
-          tx.update(ref,{status:'ocupada', byName:S.nome, at:Date.now(), carga});
+          tx.update(ref,{status:'ocupada', byName:S.nome, at:Date.now(), carga, loja});
           return {ok:true};
         });
       },
@@ -476,8 +488,8 @@ const DOCAS_INICIAIS = [
         atual={}; try{ localStorage.setItem(KEY, JSON.stringify(o)); }catch(e){} atual=o;
       },
       subscribe(cb){ cbs.push(cb); cb(Object.keys(atual).map(id=>({type:'added',id,data:atual[id]}))); return ()=>{ cbs=cbs.filter(x=>x!==cb); }; },
-      async liberar(id){ const f=ler()||atual; if(!f[id]) return; gravar(Object.assign({},f,{[id]:Object.assign({},f[id],{status:'livre',byName:S.nome,at:Date.now(),carga:''})})); },
-      async ocupar(id,carga){ const f=ler()||atual; if(!f[id]||f[id].status!=='livre') return {ok:false,motivo:'ocupada'}; gravar(Object.assign({},f,{[id]:Object.assign({},f[id],{status:'ocupada',byName:S.nome,at:Date.now(),carga})})); return {ok:true}; },
+      async liberar(id){ const f=ler()||atual; if(!f[id]) return; gravar(Object.assign({},f,{[id]:Object.assign({},f[id],{status:'livre',byName:S.nome,at:Date.now(),carga:'',loja:''})})); },
+      async ocupar(id,carga,loja){ const f=ler()||atual; if(!f[id]||f[id].status!=='livre') return {ok:false,motivo:'ocupada'}; gravar(Object.assign({},f,{[id]:Object.assign({},f[id],{status:'ocupada',byName:S.nome,at:Date.now(),carga,loja})})); return {ok:true}; },
       async adicionar(d){ const f=ler()||atual; gravar(Object.assign({},f,{[d.id]:d})); },
       async remover(id){ const f=Object.assign({},ler()||atual); delete f[id]; gravar(f); }
     };
@@ -499,7 +511,7 @@ const DOCAS_INICIAIS = [
     const meta=d.at?(free?'Liberada':'Ocupada')+' por <strong>'+esc(who(d))+'</strong><br>'+esc(rel(d.at)):'<br>Sem registro';
     return '<article class="tile '+(free?'free':'busy')+(d.tipo==='virtual'?' virtual':'')+(flash?' flash':'')+'" aria-label="Doca '+esc(d.num)+', '+(free?'livre':'ocupada')+'">'+
       '<div class="row"><span class="num">'+esc(d.num)+'</span><span class="pill"><i></i>'+(free?'Livre':'Ocupada')+'</span></div>'+
-      '<div class="meta">'+meta+(d.carga&&!free?'<br><span class="carga">Carga '+esc(d.carga)+'</span>':'')+'</div>'+
+      '<div class="meta">'+meta+(!free&&(d.carga||d.loja)?'<br>'+(d.carga?'<span class="carga">Carga '+esc(d.carga)+'</span> ':'')+(d.loja?'<span class="carga">Loja '+esc(d.loja)+'</span>':''):'')+'</div>'+
       '<button class="act" data-act="'+(free?'ocupar':'liberar')+'" data-id="'+esc(d.id)+'">'+(free?'Listar carga':'Liberar doca')+'</button>'+
     '</article>';
   }
@@ -529,7 +541,7 @@ const DOCAS_INICIAIS = [
     const items=all.filter(d=>d.at&&d.byName).sort((a,b)=>b.at-a.at).slice(0,10);
     $('#feed').innerHTML=items.length?items.map(d=>{
       const free=d.status==='livre';
-      return '<li><span class="d '+(free?'free':'')+'">'+esc(d.num)+'</span><p><strong>'+esc(who(d))+'</strong> '+(free?'liberou':'ocupou')+' a doca '+esc(d.num)+(d.carga&&!free?' · carga '+esc(d.carga):'')+'<br><small>'+esc(PAVS[d.pav]||'')+' · '+esc(rel(d.at))+'</small></p></li>';
+      return '<li><span class="d '+(free?'free':'')+'">'+esc(d.num)+'</span><p><strong>'+esc(who(d))+'</strong> '+(free?'liberou':'ocupou')+' a doca '+esc(d.num)+(!free&&d.carga?' · carga '+esc(d.carga):'')+(!free&&d.loja?' · loja '+esc(d.loja):'')+'<br><small>'+esc(PAVS[d.pav]||'')+' · '+esc(rel(d.at))+'</small></p></li>';
     }).join(''):'<li><p style="color:var(--muted)">Nenhuma movimentação ainda.</p></li>';
   }
   setInterval(render,30000);
@@ -554,7 +566,9 @@ const DOCAS_INICIAIS = [
     const d=S.docas.get(id); if(!d) return;
     if(d.status!=='livre'){ toast({title:'Doca '+d.num+' já está ocupada', text:'Outra pessoa listou carga nela.'}); return; }
     alvo=id; $('#oNum').textContent=d.num; $('#oPav').textContent=(PAVS[d.pav]||'')+' · '+(d.tipo==='virtual'?'Virtual':'Física');
-    $('#oCarga').value=''; $('#dlgOcupar').showModal(); setTimeout(()=>$('#oCarga').focus(),50);
+    $('#oCarga').value=''; $('#oLoja').value=''; $('#oCarga').classList.remove('err'); $('#oLoja').classList.remove('err');
+    $('#oWa').checked=S.wa;
+    $('#dlgOcupar').showModal(); setTimeout(()=>$('#oCarga').focus(),50);
   }
   $('#main').addEventListener('click',async e=>{
     const b=e.target.closest('button[data-act]'); if(!b||b.disabled) return;
@@ -563,28 +577,47 @@ const DOCAS_INICIAIS = [
     if(!S.nome) return pedirNome();
     const d=S.docas.get(id); if(!d) return;
     // abre o WhatsApp ainda dentro do clique (senão o navegador bloqueia o pop-up)
-    if(S.wa) abrirWhats(d);
+    if(S.wa) abrirWhats(d,'liberar');
     b.disabled=true;
     try{
       await S.store.liberar(id);
       toast({title:'Doca '+d.num+' liberada', text:S.wa?'Toque em enviar no WhatsApp para avisar o grupo.':'Todos com o app aberto foram avisados.', ttl:6000,
-        actions:[{label:S.wa?'Abrir WhatsApp de novo':'Avisar no WhatsApp', pri:!S.wa, fn:()=>abrirWhats(d)}]});
+        actions:[{label:S.wa?'Abrir WhatsApp de novo':'Avisar no WhatsApp', pri:!S.wa, fn:()=>abrirWhats(d,'liberar')}]});
     }
     catch(err){ console.error(err); toast({title:'Não foi possível salvar', text:'Verifique a conexão e tente novamente.'}); b.disabled=false; }
   });
   $('#oOk').onclick=async()=>{
-    if(!alvo) return; const id=alvo; const carga=$('#oCarga').value.trim().slice(0,30);
+    if(!alvo) return; const id=alvo;
+    const carga=$('#oCarga').value.trim().slice(0,20), loja=$('#oLoja').value.trim().slice(0,40);
+    $('#oCarga').classList.toggle('err',!carga); $('#oLoja').classList.toggle('err',!loja);
+    if(!carga){ $('#oCarga').focus(); return; }
+    if(!loja){ $('#oLoja').focus(); return; }
+    const d=S.docas.get(id); if(!d) return;
+    const avisar=$('#oWa').checked;
+    // abre a janela ainda dentro do clique (evita bloqueio de pop-up); só navega para o WhatsApp se a doca for ocupada com sucesso
+    let win=null;
+    if(avisar){ try{ win=window.open('','_blank'); }catch(e){} }
     $('#oOk').disabled=true;
     try{
-      const r=await S.store.ocupar(id,carga);
+      const r=await S.store.ocupar(id,carga,loja);
       $('#dlgOcupar').close();
-      const num=(S.docas.get(id)||{}).num||'';
-      if(!r||!r.ok) toast({title:'Doca '+num+' já foi ocupada', text:'Outra pessoa listou carga nela antes.'});
-      else toast({title:'Doca '+num+' ocupada', text:carga?'Carga '+carga:'Boa listagem!', ttl:3500});
-    }catch(err){ console.error(err); toast({title:'Não foi possível salvar', text:'Verifique a conexão e tente novamente.'}); }
+      if(!r||!r.ok){
+        if(win) win.close();
+        toast({title:'Doca '+d.num+' já foi ocupada', text:'Outra pessoa listou carga nela antes.'});
+        return;
+      }
+      const link=linkWhats(d,'listar',{carga,loja});
+      if(avisar){ if(win) win.location.href=link; }
+      toast({title:'Doca '+d.num+' ocupada', text:'Carga '+carga+' · Loja '+loja, ttl:6000,
+        actions:[{label:avisar&&win?'Abrir WhatsApp de novo':'Avisar no WhatsApp', pri:!(avisar&&win), fn:()=>abrirWhats(d,'listar',{carga,loja})}]});
+    }catch(err){
+      if(win) win.close();
+      console.error(err); toast({title:'Não foi possível salvar', text:'Verifique a conexão e tente novamente.'});
+    }
     finally{ $('#oOk').disabled=false; }
   };
-  $('#oCarga').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#oOk').click(); } });
+  $('#oLoja').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#oOk').click(); } });
+  $('#oCarga').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#oLoja').focus(); } });
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>b.closest('dialog').close());
 
   /* ---------- gerenciar docas ---------- */
@@ -631,7 +664,7 @@ const DOCAS_INICIAIS = [
           toast({kind:'free', num:d.num, title:'Doca '+d.num+' liberada!', text:(PAVS[d.pav]||'')+' · por '+d.byName, ttl:15000,
             actions:[{label:'Listar carga', pri:true, fn:()=>abrirOcupar(ch.id)}]});
         } else {
-          toast({title:'Doca '+d.num+' ocupada', text:'por '+d.byName+(d.carga?' · carga '+d.carga:''), ttl:4000});
+          toast({title:'Doca '+d.num+' ocupada', text:'por '+d.byName+(d.carga?' · carga '+d.carga:'')+(d.loja?' · loja '+d.loja:''), ttl:5000});
           if(alvo===ch.id && $('#dlgOcupar').open) $('#dlgOcupar').close();
         }
       }
